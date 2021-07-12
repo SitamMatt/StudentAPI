@@ -1,0 +1,50 @@
+on: [push]
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    
+    - uses: azure/docker-login@v1
+      with:
+        login-server: tksregistry.azurecr.io
+        username: ${{ secrets.acr_tksregistry_username }}
+        password: ${{ secrets.acr_tksregistry_password }}
+    
+    - name: Build and push image to ACR
+      id: build-image
+      run: |
+        docker build "$GITHUB_WORKSPACE/Students.Api" -f  "Students.Api/Dockerfile" -t tksregistry.azurecr.io/kubernetestest:${{ github.sha }} --label dockerfile-path=Students.Api/Dockerfile
+        docker push tksregistry.azurecr.io/kubernetestest:${{ github.sha }}
+    
+    - uses: azure/k8s-set-context@v1
+      with:
+         kubeconfig: ${{ secrets.aks_kubernetestest_kubeConfig }}
+      id: login
+    
+    - name: Create namespace
+      run: |
+        namespacePresent=`kubectl get namespace | grep kubernetes-test-student | wc -l`
+        if [ $namespacePresent -eq 0 ]
+        then
+            echo `kubectl create namespace kubernetes-test-student`
+        fi
+
+    - uses: azure/k8s-create-secret@v1
+      with:
+        namespace: kubernetes-test-student
+        container-registry-url: tksregistry.azurecr.io
+        container-registry-username: ${{ secrets.acr_tksregistry_username }}
+        container-registry-password: ${{ secrets.acr_tksregistry_password }}
+        secret-name: kubernetestedockerauth
+       
+    - uses: azure/k8s-deploy@v1.2
+      with:
+        namespace: kubernetes-test-student
+        manifests: |
+          manifests/deployment.yml
+          manifests/service.yml
+        images: |
+          tksregistry.azurecr.io/kubernetestest:${{ github.sha }}
+        imagepullsecrets: |
+          kubernetestedockerauth
